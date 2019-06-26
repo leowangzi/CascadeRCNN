@@ -1,7 +1,7 @@
 # --------------------------------------------------------
 # Pytorch FPN implementation
 # Licensed under The MIT License [see LICENSE for details]
-# Written by Jianwei Yang, based on code from faster R-CNN
+# Written by Lichao Wang, based on code from faster R-CNN, Jianwei Yang
 # --------------------------------------------------------
 
 from __future__ import absolute_import
@@ -19,12 +19,14 @@ import cv2
 import pickle
 import torch
 from torch.autograd import Variable
+import torch.nn as nn
+import torch.optim as optim
 
 from roi_data_layer.roidb import combined_roidb
 from roi_data_layer.roibatchLoader import roibatchLoader
 from model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
 from model.rpn.bbox_transform import clip_boxes
-from model.nms.nms_wrapper import nms, soft_nms
+from torchvision.ops import nms
 from model.rpn.bbox_transform import bbox_transform_inv
 from model.utils.net_utils import vis_detections
 from model.fpn.cascade.detnet_backbone import detnet as detnet_cascade
@@ -114,8 +116,10 @@ if __name__ == '__main__':
         args.set_cfgs = ['FPN_ANCHOR_SCALES', '[32, 64, 128, 256, 512]', 'FPN_FEAT_STRIDES', '[4, 8, 16, 16, 16]',
                          'MAX_NUM_GT_BOXES', '20']
     elif args.dataset == "pascal_voc_0712":
-        args.imdb_name = "voc_0712_trainval"
-        args.imdbval_name = "voc_0712_test"
+        # args.imdb_name = "voc_0712_trainval"
+        # args.imdbval_name = "voc_0712_test"
+        args.imdb_name = "voc_2007_trainval+voc_2012_trainval"
+        args.imdbval_name = "voc_2007_test"
         args.set_cfgs = ['FPN_ANCHOR_SCALES', '[32, 64, 128, 256, 512]', 'FPN_FEAT_STRIDES', '[4, 8, 16, 16, 16]',
                          'MAX_NUM_GT_BOXES', '20']
     elif args.dataset == "coco":
@@ -194,10 +198,11 @@ if __name__ == '__main__':
         gt_boxes = gt_boxes.cuda()
 
     # make variable
-    im_data = Variable(im_data, volatile=True)
-    im_info = Variable(im_info, volatile=True)
-    num_boxes = Variable(num_boxes, volatile=True)
-    gt_boxes = Variable(gt_boxes, volatile=True)
+    with torch.no_grad():
+        im_data = Variable(im_data)
+        im_info = Variable(im_info)
+        num_boxes = Variable(num_boxes)
+        gt_boxes = Variable(gt_boxes)
 
     if args.cuda:
         cfg.CUDA = True
@@ -236,14 +241,18 @@ if __name__ == '__main__':
     empty_array = np.transpose(np.array([[], [], [], [], []]), (1, 0))
     for i in range(num_images):
         data = data_iter.next()
-        im_data.data.resize_(data[0].size()).copy_(data[0])
-        im_info.data.resize_(data[1].size()).copy_(data[1])
-        gt_boxes.data.resize_(data[2].size()).copy_(data[2])
-        num_boxes.data.resize_(data[3].size()).copy_(data[3])
+
+        with torch.no_grad():
+            im_data.resize_(data[0].size()).copy_(data[0])
+            im_info.resize_(data[1].size()).copy_(data[1])
+            gt_boxes.resize_(data[2].size()).copy_(data[2])
+            num_boxes.resize_(data[3].size()).copy_(data[3])
 
         det_tic = time.time()
-        ret = fpn(im_data, im_info, gt_boxes, num_boxes)
-        rois, cls_prob, bbox_pred = ret[0:3]
+        
+        with torch.no_grad():
+            ret = fpn(im_data, im_info, gt_boxes, num_boxes)
+            rois, cls_prob, bbox_pred = ret[0:3]
 
         scores = cls_prob.data
         boxes = rois.data[:, :, 1:5]
@@ -291,13 +300,14 @@ if __name__ == '__main__':
 
                 cls_dets = torch.cat((cls_boxes, cls_scores.unsqueeze(1)), 1)
                 cls_dets = cls_dets[order]
-                if args.soft_nms:
-                    np_dets = cls_dets.cpu().numpy().astype(np.float32)
-                    keep = soft_nms(np_dets, method=cfg.TEST.SOFT_NMS_METHOD)  # np_dets will be changed
-                    keep = torch.from_numpy(keep).type_as(cls_dets).int()
-                    cls_dets = torch.from_numpy(np_dets).type_as(cls_dets)
-                else:
-                    keep = nms(cls_dets, cfg.TEST.NMS)
+                # if args.soft_nms:
+                #     np_dets = cls_dets.cpu().numpy().astype(np.float32)
+                #     keep = soft_nms(np_dets, method=cfg.TEST.SOFT_NMS_METHOD)  # np_dets will be changed
+                #     keep = torch.from_numpy(keep).type_as(cls_dets).int()
+                #     cls_dets = torch.from_numpy(np_dets).type_as(cls_dets)
+                # else:
+                #   keep = nms(cls_dets, cfg.TEST.NMS)
+                keep = nms(cls_boxes[order, :], cls_scores[order], cfg.TEST.NMS)
                 cls_dets = cls_dets[keep.view(-1).long()]
                 if vis:
                     im2show = vis_detections(im2show, imdb.classes[j], cls_dets.cpu().numpy(), 0.3)

@@ -1,7 +1,7 @@
 # --------------------------------------------------------
 # Pytorch FPN
 # Licensed under The MIT License [see LICENSE for details]
-# Written by Jianwei Yang, based on code from faster R-CNN
+# Written by Lichao Wang, based on code from faster R-CNN, Jianwei Yang
 # --------------------------------------------------------
 
 from __future__ import absolute_import
@@ -9,21 +9,29 @@ from __future__ import division
 from __future__ import print_function
 
 import _init_paths
+import os
+import sys
 import numpy as np
 import argparse
 import pprint
 import pdb
 import time
+import logging
 
 import torch
 from torch.autograd import Variable
 import torch.nn as nn
+import torch.optim as optim
+from datetime import datetime
 
+import torchvision.transforms as transforms
 from torch.utils.data.sampler import Sampler
+from model.utils.net_utils import vis_detections
 from roi_data_layer.roidb import combined_roidb
 from roi_data_layer.roibatchLoader import roibatchLoader
 from model.utils.config import cfg, cfg_from_file, cfg_from_list
 from model.utils.net_utils import adjust_learning_rate, save_checkpoint
+import cv2
 from model.fpn.cascade.detnet_backbone import detnet as detnet_cascade
 from model.fpn.non_cascade.detnet_backbone import detnet as detnet_noncascade
 from tensorboardX import SummaryWriter
@@ -178,8 +186,8 @@ if __name__ == '__main__':
         args.set_cfgs = ['FPN_ANCHOR_SCALES', '[32, 64, 128, 256, 512]', 'FPN_FEAT_STRIDES', '[4, 8, 16, 16, 16]',
                          'MAX_NUM_GT_BOXES', '20']
     elif args.dataset == "pascal_voc_0712":
-        args.imdb_name = "voc_0712_trainval"
-        args.imdbval_name = "voc_0712_test"
+        args.imdb_name = "voc_2007_trainval+voc_2012_trainval"
+        args.imdbval_name = "voc_2007_test"
         args.set_cfgs = ['FPN_ANCHOR_SCALES', '[32, 64, 128, 256, 512]', 'FPN_FEAT_STRIDES', '[4, 8, 16, 16, 16]',
                          'MAX_NUM_GT_BOXES', '20']
     elif args.dataset == "coco":
@@ -347,10 +355,12 @@ if __name__ == '__main__':
 
         for step in range(iters_per_epoch):
             data = data_iter.next()
-            im_data.data.resize_(data[0].size()).copy_(data[0])
-            im_info.data.resize_(data[1].size()).copy_(data[1])
-            gt_boxes.data.resize_(data[2].size()).copy_(data[2])
-            num_boxes.data.resize_(data[3].size()).copy_(data[3])
+
+            with torch.no_grad():
+                im_data.resize_(data[0].size()).copy_(data[0])
+                im_info.resize_(data[1].size()).copy_(data[1])
+                gt_boxes.resize_(data[2].size()).copy_(data[2])
+                num_boxes.resize_(data[3].size()).copy_(data[3])
 
             FPN.zero_grad()
             if args.cascade:
@@ -368,7 +378,7 @@ if __name__ == '__main__':
 
                 loss = rpn_loss_cls.mean() + rpn_loss_box.mean()+ RCNN_loss_cls.mean() + RCNN_loss_bbox.mean()
 
-            loss_temp += loss.data[0]
+            loss_temp += loss.item()
 
             # backward
             optimizer.zero_grad()
@@ -381,24 +391,17 @@ if __name__ == '__main__':
                     loss_temp /= args.disp_interval
 
                 if args.mGPUs:
-                    loss_rpn_cls = rpn_loss_cls.mean().data[0]
-                    loss_rpn_box = rpn_loss_box.mean().data[0]
-                    loss_rcnn_cls = RCNN_loss_cls.mean().data[0]
-                    loss_rcnn_box = RCNN_loss_bbox.mean().data[0]
-
-                    if args.cascade:
-                        loss_rcnn_cls_2nd = RCNN_loss_cls_2nd.mean().data[0]
-                        loss_rcnn_box_2nd = RCNN_loss_bbox_2nd.mean().data[0]
-                        loss_rcnn_cls_3rd = RCNN_loss_cls_3rd.mean().data[0]
-                        loss_rcnn_box_3rd = RCNN_loss_bbox_3rd.mean().data[0]
-
+                    loss_rpn_cls = rpn_loss_cls.mean().item()
+                    loss_rpn_box = rpn_loss_box.mean().item()
+                    loss_rcnn_cls = RCNN_loss_cls.mean().item()
+                    loss_rcnn_box = RCNN_loss_bbox.mean().item()
                     fg_cnt = torch.sum(roi_labels.data.ne(0))
                     bg_cnt = roi_labels.data.numel() - fg_cnt
                 else:
-                    loss_rpn_cls = rpn_loss_cls.data[0]
-                    loss_rpn_box = rpn_loss_box.data[0]
-                    loss_rcnn_cls = RCNN_loss_cls.data[0]
-                    loss_rcnn_box = RCNN_loss_bbox.data[0]
+                    loss_rpn_cls = rpn_loss_cls.item()
+                    loss_rpn_box = rpn_loss_box.item()
+                    loss_rcnn_cls = RCNN_loss_cls.item()
+                    loss_rcnn_box = RCNN_loss_bbox.item()
 
                     if args.cascade:
                         loss_rcnn_cls_2nd = RCNN_loss_cls_2nd.data[0]

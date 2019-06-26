@@ -23,7 +23,7 @@ from model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
 from model.fpn.cascade.detnet_backbone import detnet as detnet_cascade
 from model.fpn.non_cascade.detnet_backbone import detnet as detnet_noncascade
 from model.rpn.bbox_transform import clip_boxes
-from model.nms.nms_wrapper import nms, soft_nms
+from torchvision.ops import nms
 from model.rpn.bbox_transform import bbox_transform_inv
 from model.utils.net_utils import save_net, load_net, vis_detections
 from model.utils.blob import im_list_to_blob
@@ -199,10 +199,11 @@ if __name__ == '__main__':
         gt_boxes = gt_boxes.cuda()
 
     # make variable
-    im_data = Variable(im_data, volatile=True)
-    im_info = Variable(im_info, volatile=True)
-    num_boxes = Variable(num_boxes, volatile=True)
-    gt_boxes = Variable(gt_boxes, volatile=True)
+    with torch.no_grad():
+        im_data = Variable(im_data)
+        im_info = Variable(im_info)
+        num_boxes = Variable(num_boxes)
+        gt_boxes = Variable(gt_boxes)
 
     if args.cuda:
         cfg.CUDA = True
@@ -241,18 +242,20 @@ if __name__ == '__main__':
         im_data_pt = im_data_pt.permute(0, 3, 1, 2)
         im_info_pt = torch.from_numpy(im_info_np)
 
-        im_data.data.resize_(im_data_pt.size()).copy_(im_data_pt)
-        im_info.data.resize_(im_info_pt.size()).copy_(im_info_pt)
-        gt_boxes.data.resize_(1, 1, 5).zero_()
-        num_boxes.data.resize_(1).zero_()
+        with torch.no_grad():
+            im_data.resize_(im_data_pt.size()).copy_(im_data_pt)
+            im_info.resize_(im_info_pt.size()).copy_(im_info_pt)
+            gt_boxes.resize_(1, 1, 5).zero_()
+            num_boxes.resize_(1).zero_()
 
         # pdb.set_trace()
 
         det_tic = time.time()
         # rois, cls_prob, bbox_pred, rpn_loss, rcnn_loss = \
         #     fpn(im_data, im_info, gt_boxes, num_boxes)
-        ret = fpn(im_data, im_info, gt_boxes, num_boxes)
-        rois, cls_prob, bbox_pred = ret[0:3]
+        with torch.no_grad():
+            ret = fpn(im_data, im_info, gt_boxes, num_boxes)
+            rois, cls_prob, bbox_pred = ret[0:3]
 
         scores = cls_prob.data
         boxes = (rois[:, :, 1:5] / im_scales[0]).data
@@ -295,13 +298,13 @@ if __name__ == '__main__':
                 cls_dets = torch.cat((cls_boxes, cls_scores.unsqueeze(1)), 1)
                 cls_dets = cls_dets[order]
 
-                if args.soft_nms:
-                    np_dets = cls_dets.cpu().numpy().astype(np.float32)
-                    keep = soft_nms(np_dets, method=cfg.TEST.SOFT_NMS_METHOD)  # np_dets will be changed
-                    keep = torch.from_numpy(keep).type_as(cls_dets).int()
-                    cls_dets = torch.from_numpy(np_dets).type_as(cls_dets)
-                else:
-                    keep = nms(cls_dets, cfg.TEST.NMS)
+                # if args.soft_nms:
+                #     np_dets = cls_dets.cpu().numpy().astype(np.float32)
+                #     keep = soft_nms(np_dets, method=cfg.TEST.SOFT_NMS_METHOD)  # np_dets will be changed
+                #     keep = torch.from_numpy(keep).type_as(cls_dets).int()
+                #     cls_dets = torch.from_numpy(np_dets).type_as(cls_dets)
+                # else:
+                keep = nms(cls_dets, cfg.TEST.NMS)
                 cls_dets = cls_dets[keep.view(-1).long()]
                 cls_dets = cls_dets.cpu().numpy()
             else:
